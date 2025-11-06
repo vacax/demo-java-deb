@@ -1,0 +1,78 @@
+plugins {
+    id 'java'
+    id 'application'
+    id("com.gradleup.shadow") version "9.2.0+"
+}
+
+group = 'edu.pucmm.eict'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+application {
+    mainClass = 'edu.pucmm.eict.Main'
+}
+
+dependencies {
+    testImplementation platform('org.junit:junit-bom:5.10.0')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+def findJpackage() {
+    def javaHome = System.getenv("JAVA_HOME")
+    def candidates = []
+
+    if (javaHome) {
+        candidates << "${javaHome}/bin/jpackage"
+    }
+    candidates << '/usr/bin/jpackage'
+    candidates << '/usr/lib/jvm/java-21-openjdk-amd64/bin/jpackage'
+    candidates << '/usr/lib/jvm/java-17-openjdk-amd64/bin/jpackage'
+
+    try {
+        def whichProc = ['which', 'jpackage'].execute()
+        whichProc.waitFor()
+        if (whichProc.exitValue() == 0) {
+            candidates << whichProc.text.trim()
+        }
+    } catch (ignored) { }
+
+    def found = candidates.find { new File(it).exists() }
+    if (found) {
+        println "✅ Usando jpackage en: ${found}"
+        return found
+    } else {
+        throw new GradleException("❌ No se encontró jpackage. Instala un JDK 14+ (por ejemplo openjdk-21-jdk).")
+    }
+}
+
+tasks.register('jpackageApp', Exec) {
+    dependsOn shadowJar
+
+    doFirst {
+        println "📦 Verificando archivo JAR..."
+        fileTree('build/libs').matching { include '*-all.jar' }.files.each { println " - ${it}" }
+    }
+
+    def jarFile = fileTree('build/libs').matching { include '*-all.jar' }.singleFile
+    def jpackageBin = findJpackage()
+
+    commandLine jpackageBin,
+            '--type', 'deb',
+            '--input', 'build/libs',
+            '--main-jar', jarFile.name,
+            '--name', 'demo-java-deb',
+            '--main-class', 'edu.pucmm.eict.Main',
+            '--app-version', version,
+            '--vendor', 'Escuela de Ing. en Computación y Telecomunicaciones, PUCMM',
+            '--description', 'Aplicación Java empaquetada con Gradle y jpackage',
+            '--java-options', '-Xmx256m',
+            '--linux-package-deps', 'default-jre-headless'
+}

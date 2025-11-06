@@ -1,0 +1,13 @@
+#!/bin/bash
+set -e
+
+SERVICE_FILE="/opt/demo-java-deb/systemd/demo-java-deb.service"
+
+if [ -f "$SERVICE_FILE" ]; then
+    echo "Instalando servicio systemd..."
+    cp "$SERVICE_FILE" /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable --now demo-java-deb.service
+fi
+
+exit 0
