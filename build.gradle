@@ -1,14 +1,21 @@
 plugins {
     id 'java'
     id 'application'
-    id("com.gradleup.shadow") version "9.2.0+"
+    id 'com.gradleup.shadow' version '9.6.1'
 }
 
 group = 'edu.pucmm.eict'
-version = '1.0-SNAPSHOT'
+// jpackage y dpkg exigen una versión que empiece por dígito y sin "-SNAPSHOT".
+version = '1.1.0'
 
 repositories {
     mavenCentral()
+}
+
+// El bytecode corre en cualquier JRE 17+, aunque se compile con un JDK más nuevo.
+tasks.withType(JavaCompile).configureEach {
+    options.release = 17
+    options.encoding = 'UTF-8'
 }
 
 application {
@@ -16,7 +23,7 @@ application {
 }
 
 dependencies {
-    testImplementation platform('org.junit:junit-bom:5.10.0')
+    testImplementation platform('org.junit:junit-bom:5.13.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
@@ -25,54 +32,168 @@ test {
     useJUnitPlatform()
 }
 
-def findJpackage() {
-    def javaHome = System.getenv("JAVA_HOME")
-    def candidates = []
-
-    if (javaHome) {
-        candidates << "${javaHome}/bin/jpackage"
-    }
-    candidates << '/usr/bin/jpackage'
-    candidates << '/usr/lib/jvm/java-21-openjdk-amd64/bin/jpackage'
-    candidates << '/usr/lib/jvm/java-17-openjdk-amd64/bin/jpackage'
-
-    try {
-        def whichProc = ['which', 'jpackage'].execute()
-        whichProc.waitFor()
-        if (whichProc.exitValue() == 0) {
-            candidates << whichProc.text.trim()
-        }
-    } catch (ignored) { }
-
-    def found = candidates.find { new File(it).exists() }
-    if (found) {
-        println "✅ Usando jpackage en: ${found}"
-        return found
-    } else {
-        throw new GradleException("❌ No se encontró jpackage. Instala un JDK 14+ (por ejemplo openjdk-21-jdk).")
+tasks.named('shadowJar') {
+    manifest {
+        attributes 'Main-Class': application.mainClass.get(),
+                'Implementation-Title': project.name,
+                'Implementation-Version': project.version
     }
 }
 
-tasks.register('jpackageApp', Exec) {
-    dependsOn shadowJar
+// ---------------------------------------------------------------------------
+// Datos comunes a los dos paquetes
+// ---------------------------------------------------------------------------
+def mantenedor = 'Carlos Camacho <ca.camacho@ce.pucmm.edu.do>'
+def descripcion = 'Servicio HTTP de ejemplo en Java empaquetado como deb (ICC-331, PUCMM)'
+def dirDistribuciones = layout.buildDirectory.dir('distribuciones')
+
+/** Busca jpackage en tiempo de EJECUCIÓN (nunca al configurar el proyecto). */
+def buscarJpackage = {
+    def candidatos = []
+    def javaHome = System.getenv('JAVA_HOME')
+    if (javaHome) candidatos << "${javaHome}/bin/jpackage"
+    candidatos << "${System.getProperty('java.home')}/bin/jpackage"
+    candidatos << '/usr/bin/jpackage'
+    def encontrado = candidatos.find { new File(it).canExecute() }
+    if (!encontrado) {
+        throw new GradleException('No se encontró jpackage. Instale un JDK 17+ completo (ej. openjdk-21-jdk) y defina JAVA_HOME.')
+    }
+    logger.lifecycle("Usando jpackage: ${encontrado}")
+    encontrado
+}
+
+def verificarComando = { String cmd, String paquete ->
+    def proc = ['sh', '-c', "command -v ${cmd}"].execute()
+    proc.waitFor()
+    if (proc.exitValue() != 0) {
+        throw new GradleException("Falta '${cmd}'. Instálelo con: sudo apt install ${paquete}")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Opción A: paquete AUTOCONTENIDO con jpackage (incluye su propio runtime Java)
+//   build/distribuciones/demo-java-deb_<versión>_amd64.deb  ->  /opt/demo-java-deb
+// ---------------------------------------------------------------------------
+
+// jpackage empaqueta TODO lo que haya en --input, por eso se aísla el fat-jar.
+def prepararEntradaJpackage = tasks.register('prepararEntradaJpackage', Sync) {
+    group = 'empaquetado'
+    description = 'Copia solo el fat-jar a build/jpackage/entrada.'
+    from tasks.named('shadowJar')
+    into layout.buildDirectory.dir('jpackage/entrada')
+}
+
+tasks.register('debJpackage', Exec) {
+    group = 'empaquetado'
+    description = 'Genera el .deb autocontenido (con runtime Java propio) usando jpackage.'
+    dependsOn prepararEntradaJpackage
+
+    def nombreJar = tasks.named('shadowJar').flatMap { it.archiveFileName }
+    inputs.files(prepararEntradaJpackage)
+    inputs.dir('src/packaging/jpackage')
+    outputs.dir(dirDistribuciones)
 
     doFirst {
-        println "📦 Verificando archivo JAR..."
-        fileTree('build/libs').matching { include '*-all.jar' }.files.each { println " - ${it}" }
+        verificarComando('dpkg-deb', 'dpkg-dev')
+        verificarComando('fakeroot', 'fakeroot')
+        verificarComando('objcopy', 'binutils')
+        def destino = dirDistribuciones.get().asFile
+        destino.mkdirs()
+        // jpackage falla si el .deb de salida ya existe.
+        project.delete(fileTree(destino) { include 'demo-java-deb_*.deb' })
+
+        executable = buscarJpackage()
+        args '--type', 'deb',
+                '--dest', destino,
+                '--input', layout.buildDirectory.dir('jpackage/entrada').get().asFile,
+                '--main-jar', nombreJar.get(),
+                '--main-class', application.mainClass.get(),
+                '--name', 'demo-java-deb',
+                '--app-version', project.version,
+                '--vendor', 'PUCMM - EICT',
+                '--description', descripcion,
+                // runtime mínimo generado con jlink: solo los módulos que usa la app
+                '--add-modules', 'java.base,jdk.httpserver',
+                '--jlink-options', '--strip-debug --no-man-pages --no-header-files',
+                '--java-options', '-Xmx128m',
+                '--java-options', '-Dstdout.encoding=UTF-8',
+                '--java-options', '-Dstderr.encoding=UTF-8',
+                // postinst / prerm / postrm propios (reemplazan las plantillas de jpackage)
+                '--resource-dir', file('src/packaging/jpackage/resources'),
+                // archivos extra que quedan dentro de /opt/demo-java-deb/lib/
+                '--app-content', file('src/packaging/jpackage/contenido/systemd'),
+                '--linux-package-name', 'demo-java-deb',
+                '--linux-deb-maintainer', 'ca.camacho@ce.pucmm.edu.do',
+                '--linux-app-category', 'utils',
+                '--linux-app-release', '1'
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Opción B: paquete deb "a mano" con dpkg-deb (usa el Java del sistema)
+//   build/distribuciones/demo-java-deb-jre_<versión>-1_all.deb
+// Es la estructura que se ve en clase: DEBIAN/control + scripts + árbol de archivos.
+// ---------------------------------------------------------------------------
+def nombreDebManual = 'demo-java-deb-jre'
+def raizDebManual = layout.buildDirectory.dir("deb-manual/${nombreDebManual}_${project.version}-1_all")
+
+def prepararDebManual = tasks.register('prepararDebManual', Sync) {
+    group = 'empaquetado'
+    description = 'Arma el árbol de archivos del paquete deb manual.'
+    into raizDebManual
+
+    from('src/packaging/deb-manual') {
+        filter { String linea ->
+            linea.replace('@VERSION@', project.version.toString())
+                    .replace('@MANTENEDOR@', mantenedor)
+                    .replace('@DESCRIPCION@', descripcion)
+        }
+    }
+    from(tasks.named('shadowJar')) {
+        into "usr/share/${nombreDebManual}"
+        rename { "${nombreDebManual}.jar" }
     }
 
-    def jarFile = fileTree('build/libs').matching { include '*-all.jar' }.singleFile
-    def jpackageBin = findJpackage()
+    // Permisos que exige dpkg: scripts de mantenedor y lanzador ejecutables.
+    eachFile { f ->
+        if (f.path ==~ /DEBIAN\/(preinst|postinst|prerm|postrm)/ || f.path.startsWith('usr/bin/')) {
+            f.permissions { unix('0755') }
+        } else {
+            f.permissions { unix('0644') }
+        }
+    }
+    dirPermissions { unix('0755') }
 
-    commandLine jpackageBin,
-            '--type', 'deb',
-            '--input', 'build/libs',
-            '--main-jar', jarFile.name,
-            '--name', 'demo-java-deb',
-            '--main-class', 'edu.pucmm.eict.Main',
-            '--app-version', version,
-            '--vendor', 'Escuela de Ing. en Computación y Telecomunicaciones, PUCMM',
-            '--description', 'Aplicación Java empaquetada con Gradle y jpackage',
-            '--java-options', '-Xmx256m',
-            '--linux-package-deps', 'default-jre-headless'
+    doLast {
+        // Installed-Size (en KiB) se calcula sobre lo que realmente se instala.
+        def raiz = raizDebManual.get().asFile
+        long bytes = 0
+        raiz.eachFileRecurse(groovy.io.FileType.FILES) { f ->
+            if (!f.path.contains('/DEBIAN/')) bytes += f.length()
+        }
+        def control = new File(raiz, 'DEBIAN/control')
+        control.text = control.text.replace('@INSTALLED_SIZE@', String.valueOf((long) Math.ceil(bytes / 1024.0)))
+    }
+}
+
+tasks.register('debManual', Exec) {
+    group = 'empaquetado'
+    description = 'Genera el .deb con dpkg-deb (arquitectura all, depende del JRE del sistema).'
+    dependsOn prepararDebManual
+    inputs.files(prepararDebManual)
+    outputs.dir(dirDistribuciones)
+
+    doFirst {
+        verificarComando('dpkg-deb', 'dpkg-dev')
+        dirDistribuciones.get().asFile.mkdirs()
+    }
+    // --root-owner-group: los archivos quedan como root:root sin necesitar fakeroot.
+    commandLine 'dpkg-deb', '--root-owner-group', '--build',
+            raizDebManual.get().asFile, dirDistribuciones.get().asFile
+}
+
+tasks.register('paquetes') {
+    group = 'empaquetado'
+    description = 'Genera los dos paquetes deb.'
+    dependsOn 'debManual', 'debJpackage'
 }

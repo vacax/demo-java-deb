@@ -1,0 +1,5 @@
+# Configuración de demo-java-deb-jre (leída por systemd vía EnvironmentFile=).
+# Este archivo es un "conffile": dpkg NO lo sobrescribe en una actualización si
+# usted lo modificó, y solo se elimina con: apt purge demo-java-deb-jre
+PUERTO=7071
+MENSAJE="Hola desde el paquete deb que usa el JRE del sistema"

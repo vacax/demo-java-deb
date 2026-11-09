@@ -1,0 +1,21 @@
+#!/bin/sh
+set -e
+
+PAQUETE=demo-java-deb-jre
+
+case "$1" in
+    configure)
+        if ! getent passwd "$PAQUETE" >/dev/null; then
+            useradd --system --user-group --no-create-home \
+                    --home-dir /nonexistent --shell /usr/sbin/nologin "$PAQUETE"
+        fi
+        # La unidad ya quedó en /usr/lib/systemd/system (la instaló dpkg).
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload
+            systemctl enable $PAQUETE.service
+            systemctl restart $PAQUETE.service
+        fi
+        ;;
+esac
+
+exit 0

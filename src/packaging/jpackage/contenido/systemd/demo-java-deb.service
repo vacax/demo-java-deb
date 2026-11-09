@@ -1,0 +1,26 @@
+[Unit]
+Description=Demo Java Deb - servicio HTTP de ejemplo (jpackage)
+Documentation=https://github.com/vacax/demo-java-deb
+After=network.target
+
+[Service]
+Type=simple
+# Lanzador nativo generado por jpackage (usa el runtime incluido en /opt/demo-java-deb/lib/runtime)
+ExecStart=/opt/demo-java-deb/bin/demo-java-deb
+EnvironmentFile=-/etc/default/demo-java-deb
+User=demo-java-deb
+Group=demo-java-deb
+# Crea /var/lib/demo-java-deb (dueño: User=) y exporta STATE_DIRECTORY
+StateDirectory=demo-java-deb
+Restart=on-failure
+RestartSec=3
+# La JVM termina con 128+15=143 al recibir SIGTERM: no es un fallo
+SuccessExitStatus=143
+# Endurecimiento básico
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

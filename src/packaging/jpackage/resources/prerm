@@ -1,0 +1,19 @@
+#!/bin/sh
+# prerm: se ejecuta ANTES de borrar los archivos (remove, upgrade, purge...).
+set -e
+
+PAQUETE=demo-java-deb
+
+if [ -d /run/systemd/system ] && systemctl list-unit-files "$PAQUETE.service" >/dev/null 2>&1; then
+    case "$1" in
+        remove|purge)
+            systemctl disable --now $PAQUETE.service || true
+            ;;
+        upgrade)
+            # en una actualización solo se detiene; postinst lo vuelve a iniciar
+            systemctl stop $PAQUETE.service || true
+            ;;
+    esac
+fi
+
+exit 0

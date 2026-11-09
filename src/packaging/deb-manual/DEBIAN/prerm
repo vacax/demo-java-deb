@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+PAQUETE=demo-java-deb-jre
+
+if [ -d /run/systemd/system ]; then
+    case "$1" in
+        remove|purge) systemctl disable --now $PAQUETE.service || true ;;
+        upgrade)      systemctl stop $PAQUETE.service || true ;;
+    esac
+fi
+
+exit 0

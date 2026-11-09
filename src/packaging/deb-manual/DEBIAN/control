@@ -1,0 +1,13 @@
+Package: demo-java-deb-jre
+Version: @VERSION@-1
+Section: java
+Priority: optional
+Architecture: all
+Depends: default-jre-headless (>= 2:1.17) | java17-runtime-headless
+Installed-Size: @INSTALLED_SIZE@
+Maintainer: @MANTENEDOR@
+Homepage: https://github.com/vacax/demo-java-deb
+Description: @DESCRIPCION@
+ Variante construida con dpkg-deb. No incluye runtime: depende del JRE
+ que provee la distribución (apt lo resuelve e instala automáticamente).
+ Instala un servicio systemd que escucha HTTP en el puerto 7071.

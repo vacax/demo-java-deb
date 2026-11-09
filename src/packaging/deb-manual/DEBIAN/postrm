@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+PAQUETE=demo-java-deb-jre
+
+case "$1" in
+    purge)
+        # /etc/default/demo-java-deb-jre lo borra dpkg por ser conffile
+        rm -rf /var/lib/$PAQUETE /var/lib/private/$PAQUETE
+        if getent passwd "$PAQUETE" >/dev/null; then
+            userdel "$PAQUETE" || true
+        fi
+        ;;
+esac
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi
+
+exit 0

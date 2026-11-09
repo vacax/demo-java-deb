@@ -1,0 +1,25 @@
+#!/bin/sh
+# postrm: se ejecuta DESPUÉS de borrar los archivos.
+#   remove -> quita lo instalado pero conserva configuración y datos
+#   purge  -> borra además configuración, datos y el usuario
+set -e
+
+PAQUETE=demo-java-deb
+
+case "$1" in
+    remove)
+        rm -f /etc/systemd/system/$PAQUETE.service
+        [ -d /run/systemd/system ] && systemctl daemon-reload || true
+        ;;
+    purge)
+        rm -f /etc/systemd/system/$PAQUETE.service
+        rm -f /etc/default/$PAQUETE
+        rm -rf /var/lib/$PAQUETE /var/lib/private/$PAQUETE
+        if getent passwd "$PAQUETE" >/dev/null; then
+            userdel "$PAQUETE" || true
+        fi
+        [ -d /run/systemd/system ] && systemctl daemon-reload || true
+        ;;
+esac
+
+exit 0
