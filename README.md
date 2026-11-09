@@ -93,19 +93,3 @@ src/packaging/
 | `postinst configure` | después de copiar los archivos | crea el usuario de sistema, `daemon-reload`, `enable` y `restart` del servicio |
 | `prerm remove` / `prerm upgrade` | antes de borrar archivos | `disable --now` / `stop` |
 | `postrm purge` | después de borrar, al purgar | borra `/var/lib/<paquete>` y el usuario |
-
-## Por qué antes no generaba el paquete
-
-La versión original fallaba con
-`Expected directory 'build/libs' to contain exactly one file, however, it contains no files`:
-
-1. `fileTree('build/libs')...singleFile` y la búsqueda de `jpackage` se evaluaban al
-   **configurar** el proyecto, antes de compilar; con `build/` vacío cualquier tarea fallaba.
-   Ahora todo se resuelve en `doFirst` (tiempo de ejecución).
-2. `--input build/libs` metía en el paquete también el jar delgado; ahora se copia solo el fat-jar.
-3. `postinst` y `postrm` estaban en `src/main/resources` (terminaban dentro del jar) y
-   nunca se pasaban a `jpackage`. Ahora van por `--resource-dir`, y la unidad systemd por `--app-content`.
-4. La versión `1.0-SNAPSHOT` no es válida para `jpackage`/`dpkg`.
-5. La aplicación imprimía una línea y terminaba: no podía funcionar como servicio.
-6. El servicio se deshabilitaba en `postrm` (cuando el binario ya no existe); debe hacerse en `prerm`.
-7. Al detenerse, la JVM sale con código 143 y systemd la marcaba `failed`: se añadió `SuccessExitStatus=143`.
