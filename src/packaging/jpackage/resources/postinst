@@ -1,0 +1,38 @@
+#!/bin/sh
+# postinst: se ejecuta DESPUÉS de copiar los archivos del paquete.
+# Este archivo reemplaza la plantilla que trae jpackage (por estar en --resource-dir).
+set -e
+
+PAQUETE=demo-java-deb
+UNIDAD=/opt/demo-java-deb/lib/systemd/demo-java-deb.service
+
+case "$1" in
+    configure)
+        # 1) Usuario de sistema sin login para correr el servicio
+        if ! getent passwd "$PAQUETE" >/dev/null; then
+            useradd --system --user-group --no-create-home \
+                    --home-dir /nonexistent --shell /usr/sbin/nologin "$PAQUETE"
+        fi
+
+        # 2) Archivo de configuración: solo se crea si no existe (no pisar cambios del admin)
+        if [ ! -f /etc/default/$PAQUETE ]; then
+            cat > /etc/default/$PAQUETE <<CONF
+# Configuración de $PAQUETE (leída por systemd vía EnvironmentFile=)
+PUERTO=7070
+MENSAJE="Hola desde el paquete autocontenido (jpackage)"
+CONF
+        fi
+
+        # 3) jpackage solo instala bajo /opt, así que la unidad se copia a /etc/systemd/system
+        install -m 0644 "$UNIDAD" /etc/systemd/system/$PAQUETE.service
+
+        # 4) Habilitar e iniciar (solo si el sistema arrancó con systemd)
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload
+            systemctl enable $PAQUETE.service
+            systemctl restart $PAQUETE.service
+        fi
+        ;;
+esac
+
+exit 0

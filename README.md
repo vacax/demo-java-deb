@@ -1,64 +1,111 @@
 # Demo Java a Deb
 
-Descripción
------------
+Proyecto de la asignatura **ICC-331 Sistemas Operativos (PUCMM)** que muestra cómo
+convertir una aplicación Java en un paquete `.deb` que se instala como **servicio
+systemd**, de dos formas distintas:
 
-Proyecto para demostrar generar un paquete deb a partir de una aplicación Java.
+| | Opción A: `debJpackage` | Opción B: `debManual` |
+|---|---|---|
+| Paquete | `demo-java-deb_1.1.0-1_amd64.deb` | `demo-java-deb-jre_1.1.0-1_all.deb` |
+| Herramienta | `jpackage` (JDK) | `dpkg-deb` |
+| Runtime Java | **Incluido** (jlink, ~50 MB instalado) | **Dependencia** `default-jre-headless` |
+| Arquitectura | `amd64` | `all` |
+| Instala en | `/opt/demo-java-deb` | `/usr/bin`, `/usr/share`, `/usr/lib/systemd/system`, `/etc/default` |
+| Puerto | 7070 | 7071 |
 
-Requisitos
----------
-- JDK 17+ (o la versión requerida)
-- Maven o Gradle (si el proyecto usa alguno)
-- IntelliJ IDEA (opcional, recomendado en Windows)
+La aplicación es un servidor HTTP mínimo (sin dependencias, usa `jdk.httpserver`)
+que guarda un contador de visitas en `/var/lib/<paquete>/visitas.txt`. Ese archivo
+sirve para observar qué conserva `apt remove` y qué borra `apt purge`.
 
-Estructura
----------
-- `src/main/java` - código fuente
-- `src/test/java` - pruebas
-- `pom.xml` / `build.gradle` - configuración de build
+## Requisitos (Ubuntu / Debian)
 
-Compilar
--------
-Desde IntelliJ IDEA:
-1. Abrir el proyecto en `IntelliJ IDEA`.
-2. Esperar a que IntelliJ indexe las dependencias.
-3. Ejecutar Build \> Build Project.
+```bash
+sudo apt install openjdk-21-jdk-headless fakeroot binutils dpkg-dev
+```
 
-Desde línea de comandos (Windows):
+- `openjdk-21-jdk-headless`: trae `jpackage` y `jlink` (cualquier JDK 17+ sirve; con SDKMAN defina `JAVA_HOME`).
+- `fakeroot` y `binutils` (`objcopy`): los usa `jpackage` para construir el `.deb`.
+- `dpkg-dev`: provee `dpkg-deb`.
 
-- Con Maven: 
- 
-```mvn clean package```
+> `jpackage` solo genera paquetes del sistema operativo donde se ejecuta: el `.deb`
+> debe construirse en Linux (Debian/Ubuntu), no en Windows ni macOS.
 
-  El artefacto generado quedará en `target/`.
+## Construir
 
-- Con Gradle (wrapper):
+```bash
+./gradlew test          # pruebas unitarias
+./gradlew debJpackage   # Opción A
+./gradlew debManual     # Opción B
+./gradlew paquetes      # ambas
+ls build/distribuciones/
+```
 
-```.\gradlew clean build```
-  
-El artefacto generado quedará en `build/libs/`.
+## Inspeccionar un paquete
 
-- Con `javac` (proyecto simple sin build tools):
+```bash
+dpkg-deb -I build/distribuciones/demo-java-deb-jre_1.1.0-1_all.deb   # control y scripts
+dpkg-deb -c build/distribuciones/demo-java-deb-jre_1.1.0-1_all.deb   # archivos
+ar t build/distribuciones/demo-java-deb-jre_1.1.0-1_all.deb          # debian-binary, control.tar.*, data.tar.*
+```
 
-````
-javac -d out src\main\java\com\miempresa*.java
-````
+## Instalar, probar y desinstalar
 
-Ejecutar
--------
-Desde IntelliJ IDEA:
-- Ejecutar la clase con el método `main` o crear una configuración de ejecución en Run \> Edit Configurations.
+Use `apt` (no `dpkg -i`) para que resuelva las dependencias. El `./` es obligatorio:
 
-Desde línea de comandos (Windows):
+```bash
+sudo apt install ./build/distribuciones/demo-java-deb-jre_1.1.0-1_all.deb
 
-- Ejecutar JAR:
+systemctl status demo-java-deb-jre
+journalctl -u demo-java-deb-jre -f
+curl http://localhost:7071/
 
-````
-java -jar target\nombre-del-artefacto.jar
-````
+# Cambiar la configuración (conffile) y reiniciar
+sudo nano /etc/default/demo-java-deb-jre
+sudo systemctl restart demo-java-deb-jre
 
-o si usas Gradle:
+sudo apt remove demo-java-deb-jre   # conserva /etc/default/... y /var/lib/...
+sudo apt purge  demo-java-deb-jre   # borra configuración, datos y el usuario de sistema
+```
 
-````
-java -jar build\libs\nombre-del-artefacto.jar
-````
+Para la Opción A sustituya el nombre por `demo-java-deb` y el puerto por `7070`.
+
+## Estructura
+
+```
+src/main/java/edu/pucmm/eict/Main.java          aplicación (servidor HTTP)
+src/packaging/
+├── jpackage/                                   Opción A
+│   ├── resources/{postinst,prerm,postrm}       reemplazan las plantillas de jpackage (--resource-dir)
+│   └── contenido/systemd/demo-java-deb.service queda en /opt/demo-java-deb/lib/systemd (--app-content)
+└── deb-manual/                                 Opción B: es el árbol del paquete tal cual
+    ├── DEBIAN/control                          metadatos (@VERSION@ e @INSTALLED_SIZE@ los completa Gradle)
+    ├── DEBIAN/conffiles                        archivos de configuración que dpkg protege
+    ├── DEBIAN/{postinst,prerm,postrm}          scripts del mantenedor
+    ├── etc/default/demo-java-deb-jre           configuración (PUERTO, MENSAJE)
+    ├── usr/bin/demo-java-deb-jre               lanzador: java -jar ...
+    └── usr/lib/systemd/system/demo-java-deb-jre.service
+```
+
+### Qué hace cada script del mantenedor
+
+| Script | Cuándo corre | Qué hace aquí |
+|---|---|---|
+| `postinst configure` | después de copiar los archivos | crea el usuario de sistema, `daemon-reload`, `enable` y `restart` del servicio |
+| `prerm remove` / `prerm upgrade` | antes de borrar archivos | `disable --now` / `stop` |
+| `postrm purge` | después de borrar, al purgar | borra `/var/lib/<paquete>` y el usuario |
+
+## Por qué antes no generaba el paquete
+
+La versión original fallaba con
+`Expected directory 'build/libs' to contain exactly one file, however, it contains no files`:
+
+1. `fileTree('build/libs')...singleFile` y la búsqueda de `jpackage` se evaluaban al
+   **configurar** el proyecto, antes de compilar; con `build/` vacío cualquier tarea fallaba.
+   Ahora todo se resuelve en `doFirst` (tiempo de ejecución).
+2. `--input build/libs` metía en el paquete también el jar delgado; ahora se copia solo el fat-jar.
+3. `postinst` y `postrm` estaban en `src/main/resources` (terminaban dentro del jar) y
+   nunca se pasaban a `jpackage`. Ahora van por `--resource-dir`, y la unidad systemd por `--app-content`.
+4. La versión `1.0-SNAPSHOT` no es válida para `jpackage`/`dpkg`.
+5. La aplicación imprimía una línea y terminaba: no podía funcionar como servicio.
+6. El servicio se deshabilitaba en `postrm` (cuando el binario ya no existe); debe hacerse en `prerm`.
+7. Al detenerse, la JVM sale con código 143 y systemd la marcaba `failed`: se añadió `SuccessExitStatus=143`.
